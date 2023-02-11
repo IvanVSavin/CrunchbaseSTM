@@ -1,0 +1,866 @@
+---
+title: "Start-ups description analysis with STM"
+author: "Ivan Savin, Kristina Chukavina, Andrey Pushkarev"
+date: "25/11/2021"
+output: word_document
+
+---
+
+<style type="text/css">
+body, td {
+   font-size: 20px;
+}
+code.r{ / Code block /
+    font-size: 6px;
+}
+</style>
+
+```{r echo=FALSE}
+setwd("I:/Business/1_Completed Projects/Kristina/code for GitHub")
+#install.packages(c("magrittr", "data.table", 'dplyr', 'ggplot2', 'cluster'))
+sapply(c("magrittr", "data.table", 'plyr','dplyr', 'ggplot2', 'cluster','knitr', 'dendextend','pkgbuild','devtools','R.methodsS3','stm','ngram','matrixStats','corrplot','ggpubr','wordcloud','readxl','tm'), require, character.only = T)
+
+# library(doParallel) 
+# cl <- makeCluster(6, type='PSOCK')
+# registerDoParallel(cl)
+
+knitr::opts_chunk$set(fig.width=15, fig.height=10) #10 15
+
+#data<-read_xlsx("startups_full_lang_NEW.xlsm")
+data<-read_xlsx("startups_full_lang_0311.xlsm")
+
+data <- data[which(data$Delete==0), ] #exclude non-english
+
+summary(data)
+head(data)
+
+data$Description<-as.character(data$Description)
+
+#Average length of response on economic growth is 1.94 words
+data$length_txt<-matrix(0,length(data$Description),1)
+
+data$length_txt<-sapply(1:length(data$Description), function(x) wordcount(data$Description[x]))
+
+hist(data$length_txt,breaks=100, main="",xlab="# of words")
+summary(data$length_txt)
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#    1.00   34.00   59.00   75.19   96.00 1464.00 
+
+table(data$Headquarters.Location)
+       # Africa          Asia        Europe North America       Oceania South America 
+       #   3544         40787         61924        101402          4838          7521 
+data$LocationNA<-matrix(0,length(data$Headquarters.Location),1)
+data$LocationNA[data$Headquarters.Location=="North America"]<-1
+data$LocationEU<-matrix(0,length(data$Headquarters.Location),1)
+data$LocationEU[data$Headquarters.Location=="Europe"]<-1
+data$LocationAS<-matrix(0,length(data$Headquarters.Location),1)
+data$LocationAS[data$Headquarters.Location=="Asia"]<-1
+data$LocationSA<-matrix(0,length(data$Headquarters.Location),1)
+data$LocationSA[data$Headquarters.Location=="South America"]<-1
+data$LocationOA<-matrix(0,length(data$Headquarters.Location),1)
+data$LocationOA[data$Headquarters.Location=="Oceania"]<-1
+data$LocationAF<-matrix(0,length(data$Headquarters.Location),1)
+data$LocationAF[data$Headquarters.Location=="Africa"]<-1
+
+hist(data$Founded.Date, main="Distribution of start-ups by year of foundation",xlab="year",breaks = c(2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019),xaxt='n')
+axis(side=1, at=c(2008.5,2009.5,2010.5,2011.5,2012.5,2013.5,2014.5,2015.5,2016.5,2017.5,2018.5), labels=c(2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019))
+
+```
+
+ Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+    1.0    34.0    59.0    75.2    96.0  1464.0  
+
+       Africa          Asia        Europe North America       Oceania South America 
+         3544         40764         61881        101371          4837          7509 
+
+Load the lemmatized and cleaned data 
+dropping stopwords (including the list of your cistom sopwords) and rare words (appearing in less than 10! documents). The latter is typical for STM (Tvinnereim  used a threshold of 5 but had much less doscuments than we do) as rare words do not contribute much to clusters of words (topics). 
+
+As a result, we get the following message from the algorithm on data cleaning:
+
+Removing 255315 of 272232 terms (364310 of 7437481 tokens) due to frequency 
+Removing 11 Documents with No Words 
+Your corpus now has 250226 documents, 16917 terms and 7073171 tokens.>
+
+& test STM models for number of topics 3:50 
+```{r, echo=FALSE}
+
+
+Description<-data$Description
+Description <- gsub("[^A-Za-z ]"," ", Description)     #keep only english letters basically (avoid a and alike) 
+
+library(textstem)
+description_lemm <- lemmatize_strings(Description)
+description_stem <- stem_strings(Description)
+
+head(Description)
+head(description_lemm) 
+head(description_stem)
+
+
+library(tm)
+stop_words <- stopwords("SMART")
+print(stop_words) #words "first/second/third" to be filtered out
+
+stopwords<-read_excel("stopwords_startups_ed.xlsx",col_names = FALSE )
+stopwords <- as.character(stopwords$...1)
+mystopwords <-c(stopwords, stop_words)
+
+
+library(stm)
+processed <- textProcessor(description_lemm,
+                           metadata = data, lowercase = TRUE,
+                           removestopwords = TRUE, removenumbers = TRUE,
+                           removepunctuation = TRUE, stem = FALSE,
+                           wordLengths = c(3, Inf), sparselevel = 1, customstopwords=mystopwords, language = "en",
+                           verbose = TRUE)
+# Building corpus... 
+# Converting to Lower Case... 
+# Removing punctuation... 
+# Removing stopwords... 
+# Remove Custom Stopwords...
+# Removing numbers... 
+# Creating Output... 
+out <- prepDocuments(processed$documents, processed$vocab, meta=processed$meta, lower.thresh=10,verbose = TRUE)
+# Removing 255315 of 272232 terms (364310 of 7437481 tokens) due to frequency 
+# Removing 11 Documents with No Words 
+# Your corpus now has 250226 documents, 16917 terms and 7073171 tokens.>
+
+
+print(out$vocab)
+print(length(out$vocab))
+#8899
+
+  storage<-searchK(out$documents, out$vocab, K = c(3:100),
+                   prevalence =~Founded.Date + LocationNA + LocationEU + LocationAS + LocationSA + LocationOA + LocationAF,
+                   data = out$meta,heldout.seed =59266962,init.type="Spectral",
+                   M=30,#number of keywords per topic to calculate exclusivity
+                   #max.em.its=1000 #max number of iterations per model
+  )
+  save(list = ls(all = TRUE), file = "calibration_startups_full_100.RData")
+
+
+Kchoice<-38
+
+
+par(mfrow = c(1, 3) ,mar=c(4,4,1,2)) 
+plot(storage$results$K[1:48], storage$results$heldout[1:48], ylab="Heldout log-likelihood",xlab="",col=ifelse(storage$results$K %in% Kchoice, 'red', 'blue'))
+#axis(1, at=1:length(storage$results$K[1:48]), labels=storage$results$K[1:48])
+plot(storage$results$K[1:48],storage$results$exclus[3:50],  ylab="Exclusivity",xlab="Number of Topics",col=ifelse(storage$results$K %in% Kchoice, 'red', 'blue'))
+#axis(1, at=1:length(storage$results$K[3:50]), labels=storage$results$K[1:48])
+plot(storage$results$K[1:48],storage$results$semcoh[3:50], ylab="Semantic coherence",xlab="",col=ifelse(storage$results$K %in% Kchoice, 'red', 'blue'))
+#axis(1, at=1:length(storage$results$K[3:50]), labels=storage$results$K[1:48])
+
+```
+
+
+Here we observe:
+
+ - the figure with topic proportions, i.e. how much text explained by each of the topics;  
+ - the figure with topic summary printing 20 most frequent and exclusive words for each topic;  
+ - summary of each topic with words having  highest probability (most frequent), frequency and exclusivity (FREX), LIFT and SCORE you can ignore as those are rather internal measures without intuitive interpretation;  
+  - 5 representative responses for each topic ("representative" responses are sometimes very heterogeneous, but one should remember  that as we have many topics, most of responses consist of 2-3 topics (even the most representative ones!) so it is important to look on the exclusive words and wordclouds to get a better picture.)
+  
+  We chose 38topics
+```{r, echo=FALSE}
+
+
+  ncpSelect2 <- selectModel(out$documents, 
+                            out$vocab, 
+                            K = Kchoice,
+                            prevalence =~Founded.Date + LocationNA + LocationEU + LocationAS + LocationSA + LocationOA + LocationAF,
+                            data = out$meta,
+                            runs=2,
+                            seed =59266962,
+                            init.type="Spectral",
+                            verbose=TRUE) #, emtol=1) Defaults to .001%.
+  save(list = ls(all = TRUE), file = "startups_full_36_new.RData")
+
+# Check the four selected models
+# par(mfrow = c(1, 1) ,mar=c(4,4,1,2)) 
+# plotModels(ncpSelect2,xlab="Semantic Coherence")
+# mean(unlist(ncpSelect2$semcoh))
+# mean(unlist(ncpSelect2$exclusivity))
+#semantic coherence for  2      3       4     5 topics
+#                     -151.0 -171.4  -192  -197
+#exclusivity for         2      3       4     5 topics
+#                      8.17   8.80     9.05  9.32
+# Choose run #1 based on qualitative assessment: 
+
+
+#put topic labels here
+tiopiclabel<-as.character(matrix(0,Kchoice,1))
+tiopiclabel[1]<-"T1: Wellness"
+tiopiclabel[2]<-"T2: Travel & tourism"
+tiopiclabel[3]<-"T3: Data analytics and AI" # or Machine learning and Artificial intelligence # DS, ML & AI  (Data Science, Machine Learning & Artificial Intelligence)
+tiopiclabel[4]<-"T4: Graphic design"
+tiopiclabel[5]<-"T5: Time management"
+tiopiclabel[6]<-"T6: Healthcare services"
+tiopiclabel[7]<-"T7: Online education"
+tiopiclabel[8]<-"T8: Fitness"
+tiopiclabel[9]<-"T9: Trash (location, time of establishment)"
+tiopiclabel[10]<-"T10: Energy"
+tiopiclabel[11]<-"T11: Clothes & accessories"
+tiopiclabel[12]<-"T12: Science & technology services (t-KIBS)" #t-KIBS
+tiopiclabel[13]<-"T13: Food & beverages"
+tiopiclabel[14]<-"T14: Transport & logistics"
+tiopiclabel[15]<-"T15: Recruitment services"
+tiopiclabel[16]<-"T16: Supply & distribution"
+tiopiclabel[17]<-"T17: Social platforms"
+tiopiclabel[18]<-"T18: Financial transfers & cryptocurrency"
+tiopiclabel[19]<-"T19: Cybersecurity"
+tiopiclabel[20]<-"T20: Medical devices"
+tiopiclabel[21]<-"T21: Telecommunication devices and services"
+tiopiclabel[22]<-"T22: Software development"
+tiopiclabel[23]<-"T23: Sustainable agriculture"
+tiopiclabel[24]<-"T24: Investment management"
+tiopiclabel[25]<-"T25: Mobile gaming"
+tiopiclabel[26]<-"T26: Augmented  & Virtual reality"
+tiopiclabel[27]<-"T27: Manufacturing"
+tiopiclabel[28]<-"T28: Event management"
+tiopiclabel[29]<-"T29: Video & animation"
+tiopiclabel[30]<-"T30: Trash (Location)"
+tiopiclabel[31]<-"T31: E-commerce"
+tiopiclabel[32]<-"T32: Online social networks"
+tiopiclabel[33]<-"T33: SEO and online marketing services"
+tiopiclabel[34]<-"T34: Online news and blogs"
+tiopiclabel[35]<-"T35: Pharmaceutics"
+tiopiclabel[36]<-"T36: Beauty & cosmetics"
+tiopiclabel[37]<-"T37: Legal & professional services (p-KIBS)" #p-KIBS
+tiopiclabel[38]<-"T38: Parking"
+
+ncpPrevFit_startup <- ncpSelect2$runout[[1]]
+#exclusivity(ncpPrevFit_ecogrowth, M = 10, frexw = 0.7)
+# Save workspace after model runs
+#save(list = ls(all = TRUE), file = "preparedModels-EcoGrowth-stm-pub4.RData")
+#make.dt(ncpPrevFit_climpolicy)
+plot(ncpPrevFit_startup, type="summary", main="",custom.labels=tiopiclabel)
+
+colSums(ncpPrevFit_startup$theta)/sum(ncpPrevFit_startup$theta)
+par(mfrow = c(1, 1), cex=1.5)
+plot(ncpPrevFit_startup, type="labels", labeltype="frex",text.cex = .4,n=8)
+
+
+# par(mfrow = c(1, 1) ,mar=c(0,0,0,0)) 
+# plot(ncpPrevFit_startup, type="hist")
+
+dd<-ncpPrevFit_startup$vocab
+vocab_app<-out$vocab
+junk<-out$wordcounts[out$wordcounts>500]
+freq_vocab<-out$wordcounts[out$wordcounts>500]#table(unlist(out$documents))
+vocab_app<-vocab_app[order(freq_vocab,decreasing = TRUE)]
+
+logbeta<-ncpPrevFit_startup$beta$logbeta[[1]]
+word_prob<-exp(logbeta)
+word_attribute<-sapply(1:dim(word_prob)[2], function(y) which(word_prob[,y]==max(word_prob[,y])))
+#print(out$vocab)
+word_prob_sorted<-word_prob[,order(freq_vocab,decreasing = TRUE)]
+word_attribute_sorted<-word_attribute[order(freq_vocab,decreasing = TRUE)]
+aa<-data.frame(vocab_app,sort(freq_vocab,decreasing = TRUE),t(word_prob_sorted),word_attribute_sorted)
+write.csv(aa, "vocabulary.csv")
+
+####
+# Analysis on chosen model run 
+# Table 1: most frequent and exclusive terms (FREX): 
+#label<-labelTopics(ncpPrevFit_ecogrowth, topics=NULL, n=10)
+labelTopics(ncpPrevFit_startup, topics=NULL, n=Kchoice)
+```
+Lets analyse for a momemnt the distribution of topics over texts. The info is contained in 
+ncpPrevFit_startup$theta
+```{r, echo=FALSE}
+topic_distribution<-ncpPrevFit_startup$theta
+#let's introduce threshold of topic presence , 5% (if we take 10% 1370 startups wont have any classification!)
+topic_distribution[topic_distribution<.05]<-0
+topic_distribution_binary<-topic_distribution
+topic_distribution_binary[topic_distribution_binary>0]<-1
+table(rowSums(topic_distribution_binary))
+hist(rowSums(topic_distribution_binary),  breaks=c(0,1,2,3,4,5,6,7,8,9,10,11,12), main="Number of topics per start-up", xaxt="n", xlab="")
+axis(1, at=c(.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5,9.5,10.5,11.5), labels=c(1,2,3,4,5,6,7,8,9,10,11,12))
+
+topics_per_startup<-rowSums(topic_distribution_binary)
+summary(topics_per_startup)
+
+
+
+topics_per_startup_year<-matrix(0,length(2009:2019),1)
+i_id<-0
+for (year_id in 2009:2019){
+i_id<-i_id+1
+topics_per_startup_year[i_id]<-mean(topics_per_startup[out$meta$Founded.Date==year_id])
+
+}
+plot(topics_per_startup_year,main="Average number of topics per start-up", xaxt="n", xlab="", ylab="")
+axis(1, at=c(1,2,3,4,5,6,7,8,9,10,11), labels=2009:2019)
+
+
+
+data_long<-cbind(out$meta$Organization.Name,topics_per_startup,out$meta$Founded.Date)
+data_long<-as.data.frame(data_long)
+names(data_long)<-c("Response.ID","topicsN","Year")
+data_long$topicsN<-as.numeric(data_long$topicsN)
+summary(data_long)
+
+myData <- aggregate(data_long$topicsN,
+                    by = list(data_long$Year),
+                    FUN = function(x) c(mean = mean(x), sd = sd(x),n= length(x)))
+myData <- do.call(data.frame, myData)
+myData$se <- myData$x.sd / sqrt(myData$x.n)
+colnames(myData) <- c("Year", "mean", "sd", "n", "se")
+
+
+ggplot(data = myData, aes(x = Year, y = mean))+ 
+  geom_errorbar(aes(ymin = mean-2*se, ymax = mean+2*se),
+                position= position_dodge(0.5), width = 0.2) +
+  labs(x = "Year", y = "Average # of topics")+
+  geom_point(, position = position_dodge(0.5)) +
+  labs(x = "Year", y = "Average # of topics")+
+  scale_x_discrete(labels = 2009:2019)+ 
+  theme(axis.text.x = element_text(size = 10, angle = 0))
+
+```
+
+
+```{r, echo=FALSE}
+
+# for (topic_i in 1){
+#   for (thought_i in 1:20){
+#     c<-vocab[docs[findThoughts(ncpPrevFit_climpolicy, texts=meta$Text.CarbonTaxPolicy, n=20,topics=topic_i)$index[[1]]][[thought_i]][1,]]
+#     print(c)
+#   }
+# }
+
+
+# Table 2: responses that are highly associated with topics
+nk<-10
+for (ci in 1:Kchoice){
+  cii<-ci+1
+  thoughts1<-findThoughts(ncpPrevFit_startup, texts=out$meta$Description, n=nk, topics=ci)$docs[[1]]
+  topic_proportions<-as.matrix(make.dt(ncpPrevFit_startup))[findThoughts(ncpPrevFit_startup, texts=out$meta$Description, n=nk,topics=ci)$index[[1]],cii]
+  
+  message("5 representative responses with high prevalence together with the values of those prevalences and words being   analyzed (i.e. excluding rare words dropped out from analysis) of Topic :")
+  print(tiopiclabel[ci])
+  print(thoughts1[1:nk])
+   print(topic_proportions)
+}
+```
+
+
+
+
+```{r, echo=FALSE}
+logbeta<-ncpPrevFit_startup$beta$logbeta[[1]]
+word_prob<-exp(logbeta)
+word_attribute<-sapply(1:dim(word_prob)[2], function(y) which(word_prob[,y]==max(word_prob[,y])))
+#print(out$vocab)
+ 
+
+
+logbeta <- ncpPrevFit_startup$beta$logbeta[[1]]
+wordcounts <- ncpPrevFit_startup$dim$wcounts$x
+frexlabels <-calcfrex(logbeta, 0, wordcounts)
+problabels<-apply(logbeta, 1, order, decreasing=TRUE)
+# set.seed(1234)
+# wordcloud(words = out$vocab, freq = problabels[,1],scale=c(3,.1), min.freq = 0,
+#           max.words=20, random.order=FALSE, rot.per=0.5,
+#           colors=frexlabels[,1]) 
+# shadesOfGrey <- colorRampPalette(c("grey0", "grey100"))
+# fiftyGreys <- shadesOfGrey(length(out$vocab))
+nb.cols <- length(out$vocab)
+# threshold<-15
+# mycolors <- c(rep("#FFFFE5",length(out$vocab)-threshold),colorRampPalette(brewer.pal(8, "YlOrBr"))(threshold)) #heat.colors(10) rev(heat.colors(50))
+threshold<-1000
+mycolors <- c(rep("#FFFFE5",length(out$vocab)-threshold),colorRampPalette(rev(heat.colors(100)))(threshold)) #heat.colors(10) rev(heat.colors(50))
+
+pal<-colorRampPalette(c("blue", "red"))
+mycolorsRB<-c(rep("darkblue",length(out$vocab)-threshold),pal(threshold))
+
+vec<-matrix(0,length(out$vocab),Kchoice)
+for (j in 1:Kchoice){
+  jj<-length(out$vocab)
+  for (i in 1:length(out$vocab)){
+    vec[frexlabels[i,j],j]<-jj
+    jj<-jj-1
+  }
+}
+
+par(mfrow = c(8, 5) ,mar=c(1,2,1,1)) 
+add_vector<-colSums(ncpPrevFit_startup$theta)/sum(ncpPrevFit_startup$theta)*11#c(0,0,0,1)
+equal_vector<-matrix(mean(add_vector)*1.3,Kchoice,1)#c(0,0,0,1)
+
+#vector to normalize fonts between wordclouds
+
+par(mfrow = c(8, 5) ,mar=c(1,2,1,1)) 
+set.seed(1)
+for (ci in 1:Kchoice){
+cloud(ncpPrevFit_startup, topic = ci, max.words = 30,scale=c(3,.5)*equal_vector[ci],rot.per=0,random.order=FALSE)#,colors=fiftyGreys[frexlabels[,1]])
+title(tiopiclabel[ci])
+}
+
+
+par(mfrow = c(7, 3) ,mar=c(1,2,1,1))
+set.seed(1)
+for (ci in 1:Kchoice){
+cloud(ncpPrevFit_startup, topic = ci, max.words = 30,scale=c(3,.5)*equal_vector[ci]*1.8,colors=mycolors[vec[,ci]],random.order=FALSE, random.color=FALSE, ordered.colors=TRUE,rot.per=0)
+title(tiopiclabel[ci])
+box("figure", col="black", lwd = 5)
+}
+
+tiopiclabel_wc<-as.character(matrix(0,Kchoice,1))
+tiopiclabel_wc[1]<-"T1: Wellness"
+tiopiclabel_wc[2]<-"T2: Travel & tourism"
+tiopiclabel_wc[3]<-"T3: Data analytics and AI" # or Machine learning and Artificial intelligence # DS, ML & AI  (Data Science, Machine Learning & Artificial Intelligence)
+tiopiclabel_wc[4]<-"T4: Graphic design"
+tiopiclabel_wc[5]<-"T5: Time management"
+tiopiclabel_wc[6]<-"T6: Healthcare services"
+tiopiclabel_wc[7]<-"T7: Online education"
+tiopiclabel_wc[8]<-"T8: Fitness"
+tiopiclabel_wc[9]<-"T9: Trash (location, \n time of establishment)"
+tiopiclabel_wc[10]<-"T10: Energy"
+tiopiclabel_wc[11]<-"T11: Clothes & \n accessories"
+tiopiclabel_wc[12]<-"T12: Science & technology \n services (t-KIBS)" #t-KIBS
+tiopiclabel_wc[13]<-"T13: Food & beverages"
+tiopiclabel_wc[14]<-"T14: Transport & logistics"
+tiopiclabel_wc[15]<-"T15: Recruitment services"
+tiopiclabel_wc[16]<-"T16: Supply & distribution"
+tiopiclabel_wc[17]<-"T17: Social platforms"
+tiopiclabel_wc[18]<-"T18: Financial transfers \n & cryptocurrency"
+tiopiclabel_wc[19]<-"T19: Cybersecurity"
+tiopiclabel_wc[20]<-"T20: Medical devices"
+tiopiclabel_wc[21]<-"T21: Telecommunication \n devices and services"
+tiopiclabel_wc[22]<-"T22: Software \n development"
+tiopiclabel_wc[23]<-"T23: Sustainable \n agriculture"
+tiopiclabel_wc[24]<-"T24: Investment \n management"
+tiopiclabel_wc[25]<-"T25: Mobile gaming"
+tiopiclabel_wc[26]<-"T26: Augmented  & \n Virtual reality"
+tiopiclabel_wc[27]<-"T27: Manufacturing"
+tiopiclabel_wc[28]<-"T28: Event management"
+tiopiclabel_wc[29]<-"T29: Video & animation"
+tiopiclabel_wc[30]<-"T30: Trash (Location)"
+tiopiclabel_wc[31]<-"T31: E-commerce"
+tiopiclabel_wc[32]<-"T32: Online social \n networks"
+tiopiclabel_wc[33]<-"T33: SEO and online \n marketing services"
+tiopiclabel_wc[34]<-"T34: Online news \n and blogs"
+tiopiclabel_wc[35]<-"T35: Pharmaceutics"
+tiopiclabel_wc[36]<-"T36: Beauty & cosmetics"
+tiopiclabel_wc[37]<-"T37: Legal & professional \n services (p-KIBS)" #p-KIBS
+tiopiclabel_wc[38]<-"T38: Parking"
+
+par(mfrow = c(5, 8) ,mar=c(1,2,1,1))
+set.seed(1)
+for (ci in 1:Kchoice){
+cloud(ncpPrevFit_startup, topic = ci, max.words = 30,scale=c(3,.5)*equal_vector[ci]*1.8,colors=mycolors[vec[,ci]],random.order=FALSE, random.color=FALSE, ordered.colors=TRUE,rot.per=0,cex.main=.8)
+title(tiopiclabel_wc[ci], line = -1)
+box("figure", col="black", lwd = 2)
+}
+# 
+# par(mfrow = c(7, 3) ,mar=c(1,2,1,1))
+# set.seed(1)
+# for (ci in 1:Kchoice){
+# cloud(ncpPrevFit_startup, topic = ci, max.words = 30,scale=c(3,.5)*equal_vector[ci]*1.8,colors=mycolorsRB[vec[,ci]],random.order=FALSE, random.color=FALSE, ordered.colors=TRUE,rot.per=0)
+# title(tiopiclabel[ci])
+# box("figure", col="black", lwd = 5)
+# }
+```
+
+Considering how prevalence of topics correlates with our covariates we see that:
+
+- while certain topics gain a lot in populariy, others lose a lot
+
+At the end I print the regression model of eact topic explained by time to show the size and significance of those slopes (ONLY SIGNIFICANT SLOPES ARE PLOTTED!)
+
+```{r, echo=FALSE}
+library(RColorBrewer)
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+set.seed(100)
+col=sample(col_vector, Kchoice)
+
+par(mfrow = c(1, 1))
+out$meta$LocationNA <- as.numeric(out$meta$LocationNA)
+out$meta$LocationEU <- as.numeric(out$meta$LocationEU)
+out$meta$LocationAS <- as.numeric(out$meta$LocationAS)
+out$meta$LocationSA <- as.numeric(out$meta$LocationSA)
+out$meta$LocationOA <- as.numeric(out$meta$LocationOA)
+out$meta$LocationAF <- as.numeric(out$meta$LocationAF)
+
+# Figure 1: Topical prevalence over co-variates
+
+
+
+  prep <- estimateEffect(1:Kchoice ~ Founded.Date + LocationNA + LocationEU + LocationAS + LocationSA + LocationOA + LocationAF,
+                       ncpPrevFit_startup,
+                       meta=out$meta,
+                       uncertainty = "Global")
+  save(prep, file = "prep_36_new.RData")
+
+
+par(mfrow = c(5, 2) ,mar=c(2,2,2,2))
+
+for(k_i in c(3,5,17,18,25,30,32,33,34,37)){
+plot.estimateEffect(prep,
+                    main="",
+                    covariate = "Founded.Date",
+                    topics = c(k_i),
+                    model=ncpPrevFit_startup,
+                    method="continuous",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[k_i],
+                    ylim=c(0,.15),
+                    linecol=col[k_i],
+                    ylab="Expected topic prevalence",ci.level=0.95
+)
+}
+summary(prep)
+```
+
+
+
+
+
+```{r, echo=FALSE}
+# Figure 1: Topical prevalence over co-variates
+years<-2009:2019
+topic_year_share<-matrix(0,length(years),Kchoice)
+year_idd<-1
+for (year_id in years){
+topic_year_share[year_idd,]<-colSums(ncpPrevFit_startup$theta[out$meta$Founded.Date==year_id,])/sum(ncpPrevFit_startup$theta[out$meta$Founded.Date==year_id,])
+year_idd<-year_idd+1
+}
+#rowSums(topic_year_share)
+topic_year_share<-as.data.frame(topic_year_share)
+rownames(topic_year_share)<-years
+colnames(topic_year_share)<-tiopiclabel
+
+par(mfrow = c(8, 5) ,mar=c(1,2,1,1))
+for(k_i in 1:Kchoice){
+  matplot(rownames(topic_year_share), topic_year_share[,k_i], type='l', lty=1,lwd=2, xlab='Years', ylab='Share', col=col[k_i],xaxt='n',ylim=c(0,0.15))
+  axis(side=1, at=c(2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019), labels=years)
+  legend('topright', inset=.05, legend=colnames(topic_year_share)[k_i],pch=3, col=col[k_i])
+}
+
+
+write.csv(topic_year_share, "topic_year_share.csv")
+
+```
+
+plotting how shares of topics were changing over time if we weight them by Total.Funding.Amount
+empty entries are ignored, and thus out of approx 250'000 firms, only around 72'000 observations are used
+#As you can see, some outliers in topics like 12 and 21 dominate the picture
+# we observe tima management loosing attractiveness; while some business outsourcing - gaining it
+
+```{r, echo=FALSE}
+# Figure 2: Topical dynamics in terms of Total Funding Amount
+Funding<-data$Total.Funding.Amount[data$Organization.Name %in% out$meta$Organization.Name]
+summary(Funding)
+hist(Funding, breaks=100)
+plot(density(Funding[which(!is.na(Funding))]))
+
+years<-2009:2019
+topic_FUNDINGyear_share<-matrix(0,length(years),Kchoice)
+topic_FUNDINGyear<-matrix(0,length(years),Kchoice)
+
+year_idd<-1
+for (year_id in years){
+topic_FUNDINGyear_share[year_idd,]<-colSums(ncpPrevFit_startup$theta[which(out$meta$Founded.Date==year_id),]*Funding[which(out$meta$Founded.Date==year_id)],na.rm=TRUE)/sum(ncpPrevFit_startup$theta[which(out$meta$Founded.Date==year_id),]*Funding[which(out$meta$Founded.Date==year_id)], na.rm=TRUE)
+
+topic_FUNDINGyear[year_idd,]<-colSums(ncpPrevFit_startup$theta[which(out$meta$Founded.Date==year_id),]*Funding[which(out$meta$Founded.Date==year_id)],na.rm=TRUE)
+year_idd<-year_idd+1
+}
+#rowSums(topic_year_share)
+topic_FUNDINGyear_share<-as.data.frame(topic_FUNDINGyear_share)
+rownames(topic_FUNDINGyear_share)<-years
+colnames(topic_FUNDINGyear_share)<-tiopiclabel
+
+
+par(mfrow = c(8, 5) ,mar=c(1,2,1,1))
+topic_FUNDINGyear<-as.data.frame(topic_FUNDINGyear)
+rownames(topic_FUNDINGyear)<-years
+colnames(topic_FUNDINGyear)<-tiopiclabel
+
+for(k_i in 1:Kchoice){
+  matplot(rownames(topic_FUNDINGyear_share), topic_FUNDINGyear_share[,k_i], type='l', lty=1,lwd=2, xlab='Years', ylab='Share', col=col[k_i],xaxt='n',ylim=c(0,0.5))
+  axis(side=1, at=c(2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019), labels=years)
+  legend('topright', inset=.05, legend=colnames(topic_FUNDINGyear_share)[k_i],pch=3, col=col[k_i])
+}
+par(mfrow = c(8, 5) ,mar=c(1,2,1,1))
+
+for(k_i in 1:Kchoice){
+  matplot(rownames(topic_FUNDINGyear), topic_FUNDINGyear[,k_i], type='l', lty=1,lwd=2, xlab='Years', ylab='Share', col=col[k_i],xaxt='n',ylim=c(0,max(topic_FUNDINGyear)))
+  axis(side=1, at=c(2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019), labels=years)
+  legend('topright', inset=.05, legend=colnames(topic_FUNDINGyear_share)[k_i],pch=3, col=col[k_i])
+}
+
+write.csv(topic_FUNDINGyear_share, "topic_FUNDINGyear_share.csv")
+write.csv(topic_FUNDINGyear, "topic_FUNDINGyear.csv")
+
+```
+
+```{r, echo=FALSE}
+# Comparing topic shares without and with funding information
+# slices <- t(ncpPrevFit_startup$theta) #%*% data_lemmatized$citations
+# lbls <- paste(tiopiclabel, "\n", round(slices) , sep="")
+# pie(slices, labels = lbls, main="")
+
+
+topics<-as.data.frame(matrix(0,Kchoice))
+topics$name<-tiopiclabel
+topics$share_unweighted<-colSums(ncpPrevFit_startup$theta)/sum(ncpPrevFit_startup$theta)
+weights_among_funded<-colSums(ncpPrevFit_startup$theta[which(!is.na(Funding)),])/sum(ncpPrevFit_startup$theta[which(!is.na(Funding)),])
+topics$weights<- topics$share_unweighted/weights_among_funded
+#topics$share_weighted<-(colSums(ncpPrevFit_startup$theta*Funding,na.rm=TRUE))/sum(ncpPrevFit_startup$theta*Funding,na.rm=TRUE)
+
+#calculating average amount of funding per class
+head(ncpPrevFit_startup$theta) 
+average_funding<-matrix(0,Kchoice)
+average_funding_nomissings<-matrix(0,Kchoice)
+
+for (t in 1:Kchoice){
+  average_funding[t]<-sum(ncpPrevFit_startup$theta[,t]*Funding,na.rm=TRUE)/sum(ncpPrevFit_startup$theta[,t])
+    average_funding_nomissings[t]<-sum(ncpPrevFit_startup$theta[,t]*Funding,na.rm=TRUE)/sum(ncpPrevFit_startup$theta[which(!is.na(Funding)),t])
+}
+mean(Funding,na.rm=TRUE)
+mean(average_funding)#the value is much smaller because we count shares of startups which have no funding
+mean(average_funding_nomissings)#the value differs because we assign different weights to startsups here
+
+topics$share_weighted<-matrix(0,Kchoice,1)
+for (t in 1:Kchoice){
+
+topics$share_weighted[t]<-sum(ncpPrevFit_startup$theta[which(!is.na(Funding)),t])/sum(ncpPrevFit_startup$theta[which(!is.na(Funding)),])*average_funding_nomissings[t]/mean(average_funding_nomissings)
+
+topics$share_weightedRepr[t]<-sum(ncpPrevFit_startup$theta[which(!is.na(Funding)),t])/sum(ncpPrevFit_startup$theta[which(!is.na(Funding)),])*average_funding_nomissings[t]/mean(average_funding_nomissings)*topics$weights[t]
+}
+
+# topics$share_weightedNOmiss<-colSums(ncpPrevFit_startup$theta)/sum(ncpPrevFit_startup$theta)*average_funding_nomissings/mean(average_funding_nomissings)
+
+topics$name <- factor(topics$name, levels = topics$name)
+
+topics_long<-reshape(topics, direction = "long", varying = names(topics)[c(3,5:6)], idvar = "name", sep="_",timevar="weight")
+
+
+ggplot(topics_long, aes(name, share, fill = weight)) +
+  geom_bar(stat="identity", position = "dodge") +
+  labs(title="Multiple Bar plots")+ theme(
+      axis.text.x = element_blank())+
+ # scale_x_discrete(#name = "Revenue use", 
+ #                  labels = tiopiclabel)+ 
+
+    theme(axis.text.x = element_text(size =7, angle = 70, hjust = 1))
+
+
+data_look<-as.data.frame(out$meta)
+which(!is.na(Funding) & ncpPrevFit_startup$theta[,23]>0.6)
+data_look_sust<-data_look[which(!is.na(Funding) & ncpPrevFit_startup$theta[,23]>0.6),]
+write.csv(data_look_sust,"data_look_sust.csv")
+
+```
+
+(ONLY SIGNIFICANT TOPICS ARE PLOTTED!)
+```{r, echo=FALSE}
+par(mfrow = c(3, 2),mar=c(2,2,2,2))
+plot.estimateEffect(prep,
+                    main="North America",
+                    covariate = "LocationNA",
+                    topics = c(2,3,6,11,17,20,22,24,30,31,32,33,34,35,37),
+                    model=ncpPrevFit_startup,
+                    method="difference",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[c(2,3,6,11,17,20,22,24,30,31,32,33,34,35,37)],
+                    # custom.labels=c("Attribution", "Future/Impact"),
+                    # custom.labels=c("1", "2", "3", "4"),
+                    cov.value1=1, cov.value2=0,
+                    #ylim=c(0,.1),
+                    #linecol=col[1:11],
+                    xlim=c(-.15,.15),
+                    ylab="Expected topic prevalence",ci.level=0.95
+          )
+
+
+plot.estimateEffect(prep,
+                    main="Europe",
+                    covariate = "LocationEU",
+                    topics = c(3,11,12,14,22,31,32,33,34,35),
+                    model=ncpPrevFit_startup,
+                    method="difference",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[c(3,11,12,14,22,31,32,33,34,35)],
+                    # custom.labels=c("Attribution", "Future/Impact"),
+                    # custom.labels=c("1", "2", "3", "4"),
+                    cov.value1=1, cov.value2=0,
+                    #ylim=c(0,.1),
+                    #linecol=col[1:11],
+                    xlim=c(-.15,.15),
+                    ylab="Expected topic prevalence",ci.level=0.95
+          )
+
+plot.estimateEffect(prep,
+                    main="Asia",
+                    covariate = "LocationAS",
+                    topics = c(3,9,12,17,28,30,32,34,37),
+                    model=ncpPrevFit_startup,
+                    method="difference",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[c(3,9,12,17,28,30,32,34,37)],
+                    # custom.labels=c("Attribution", "Future/Impact"),
+                    # custom.labels=c("1", "2", "3", "4"),
+                    cov.value1=1, cov.value2=0,
+                    #ylim=c(0,.1),
+                    #linecol=col[1:11],
+                    xlim=c(-.15,.15),
+                    ylab="Expected topic prevalence",ci.level=0.95
+          )
+
+
+plot.estimateEffect(prep,
+                    main="South America",
+                    covariate = "LocationSA",
+                    topics = c(3,4,11,14,17,18,22,23,30,33,34),
+                    model=ncpPrevFit_startup,
+                    method="difference",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[c(3,4,11,14,17,18,22,23,30,33,34)],
+                    # custom.labels=c("Attribution", "Future/Impact"),
+                    # custom.labels=c("1", "2", "3", "4"),
+                    cov.value1=1, cov.value2=0,
+                    #ylim=c(0,.1),
+                    #linecol=col[1:11],
+                    xlim=c(-.15,.15),
+                    ylab="Expected topic prevalence",ci.level=0.95
+          )
+plot.estimateEffect(prep,
+                    main="Australia & Oceania",
+                    covariate = "LocationOA",
+                    topics = c(3,11,22,24,25,32,33,34,37),
+                    model=ncpPrevFit_startup,
+                    method="difference",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[ c(3,11,22,24,25,32,33,34,37)],
+                    # custom.labels=c("Attribution", "Future/Impact"),
+                    # custom.labels=c("1", "2", "3", "4"),
+                    cov.value1=1, cov.value2=0,
+                    #ylim=c(0,.1),
+                    #linecol=col[1:11],
+                    xlim=c(-.15,.15),
+                    ylab="Expected topic prevalence",ci.level=0.95
+          )
+
+
+plot.estimateEffect(prep,
+                    main="Africa",
+                    covariate = "LocationAF",
+                    topics = c(4,11,17,18,23,24,30,33,34),
+                    model=ncpPrevFit_startup,
+                    method="difference",
+                    labeltype="custom",
+                    custom.labels=tiopiclabel[c(4,11,17,18,23,24,30,33,34)],
+                    # custom.labels=c("Attribution", "Future/Impact"),
+                    # custom.labels=c("1", "2", "3", "4"),
+                    cov.value1=1, cov.value2=0,
+                    #ylim=c(0,.1),
+                    #linecol=col[1:11],
+                    xlim=c(-.15,.15),
+                    ylab="Expected topic prevalence",ci.level=0.95
+          )
+```
+
+The next figure demonstrates co-occurrence of topics showing which pairs of topics tend to be mentioned within the same responses more (red) or less (blue) often.
+```{r, echo=FALSE}
+
+dt.proportions_question1<- make.dt(ncpPrevFit_startup)
+
+dt.proportions_question1<-as.matrix(dt.proportions_question1[,-1])
+
+TopicCorrMatrix1<-matrix(0,Kchoice,Kchoice)
+
+
+for (i in 1:Kchoice){
+  for (j in 1:Kchoice){
+    TopicCorrMatrix1[i,j]<-cor(dt.proportions_question1[,i],dt.proportions_question1[,j])
+  }
+}
+write.csv(TopicCorrMatrix1,"TopicCorrMatrix1.csv")
+
+
+library(corrplot)
+rownames(TopicCorrMatrix1)<-tiopiclabel
+
+colnames(TopicCorrMatrix1)<-c("T1","T2","T3","T4","T5","T6","T7","T8","T9","T10","T11","T12","T13","T14","T15","T16","T17","T18","T19","T20","T21","T22","T23","T24","T25","T26","T27","T28","T29","T30",
+                              "T31","T32","T33","T34","T35","T36","T37","T38")
+
+
+TopicCorrMatrix1<-TopicCorrMatrix1-diag(Kchoice)
+corrplot(TopicCorrMatrix1, is.corr = FALSE, order="hclust", method = "square",tl.cex=.7,tl.col = "black",cl.lim = c(-1, 1),col=colorRampPalette(c("blue","white","red"))(200))
+
+png('CorrelationMatrix1_startuponly.png',width = 12, height = 6, units = 'in', res = 1000)
+corrplot(TopicCorrMatrix1, is.corr = FALSE, order="hclust", method = "square",tl.cex=.7,tl.col = "black",cl.lim = c(-1, 1),col=colorRampPalette(c("blue","white","red"))(200))
+dev.off()
+```
+The final figure looks on how the weigts of topics we have formed correspond with the classification of industries from the Crunchbase database.
+We use Industry.Groups with 47 unique options
+
+IMPORTANT! If a firm in Crunchbase is classified to more than one group, we divide the weight between the number of groups it has been classified to. The rationale is that people there were also uncertain to which group to classify the start-up. This will affect correlations!
+
+both pearson and then spearman correlations
+```{r, echo=FALSE}
+IndustryClassification<-data$Industry.Groups[data$Organization.Name %in% out$meta$Organization.Name]
+
+IndustryClassification2<-strsplit(IndustryClassification, ", ")
+
+AllIndustriesUnique<-unique(unlist(IndustryClassification2))
+AllIndustriesTable<-table(unlist(IndustryClassification2))
+AllIndustriesClassification<-matrix(0,length(out$meta$Organization.Name),length(AllIndustriesUnique))
+AllIndustriesClassification<-as.data.frame(AllIndustriesClassification)
+#AllIndustriesUnique[which(is.na(AllIndustriesUnique))]<-"NOT CLASSIFIED"
+colnames(AllIndustriesClassification)<-AllIndustriesUnique
+
+
+for (i in 1:length(out$meta$Organization.Name)){#
+    AllIndustriesClassification[i,which(AllIndustriesUnique %in% IndustryClassification2[[i]])]<-1/length(which(AllIndustriesUnique %in% IndustryClassification2[[i]]))
+}
+
+
+TopicCorrMatrix2<-matrix(0,Kchoice,length(AllIndustriesUnique))
+
+
+for (i in 1:Kchoice){
+  for (j in 1:length(AllIndustriesUnique)){
+    TopicCorrMatrix2[i,j]<-cor(dt.proportions_question1[,i], AllIndustriesClassification[,j])
+  }
+}
+
+
+library(corrplot)
+rownames(TopicCorrMatrix2)<-tiopiclabel
+
+AllIndustriesUnique[which(is.na(AllIndustriesUnique))]<-"NOT CLASSIFIED"
+colnames(TopicCorrMatrix2)<-AllIndustriesUnique
+
+
+corrplot(TopicCorrMatrix2, is.corr = FALSE, method = "square",tl.cex=.7,tl.col = "black",cl.lim = c(-1, 1),col=colorRampPalette(c("blue","white","red"))(200))
+
+png('CorrelationMatrix2_startuponly.png',width = 12, height = 6, units = 'in', res = 1000)
+corrplot(TopicCorrMatrix2, is.corr = FALSE, method = "square",tl.cex=.7,tl.col = "black",cl.lim = c(-1, 1),col=colorRampPalette(c("blue","white","red"))(200))
+dev.off()
+
+
+TopicCorrMatrix3<-matrix(0,Kchoice,length(AllIndustriesUnique))
+
+
+for (i in 1:Kchoice){
+  for (j in 1:length(AllIndustriesUnique)){
+    TopicCorrMatrix3[i,j]<-cor(dt.proportions_question1[,i], AllIndustriesClassification[,j],method="spearman")
+  }
+}
+
+library(corrplot)
+rownames(TopicCorrMatrix3)<-tiopiclabel
+AllIndustriesUnique[which(is.na(AllIndustriesUnique))]<-"NOT CLASSIFIED"
+colnames(TopicCorrMatrix3)<-AllIndustriesUnique
+
+
+corrplot(TopicCorrMatrix3, is.corr = FALSE, method = "square",tl.cex=.7,tl.col = "black",cl.lim = c(-1, 1),col=colorRampPalette(c("blue","white","red"))(200))
+
+png('CorrelationMatrix3_startuponly.png',width = 12, height = 6, units = 'in', res = 1000)
+corrplot(TopicCorrMatrix3, is.corr = FALSE, method = "square",tl.cex=.7,tl.col = "black",cl.lim = c(-1, 1),col=colorRampPalette(c("blue","white","red"))(200))
+dev.off()
+```
+
